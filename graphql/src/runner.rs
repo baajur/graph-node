@@ -1,4 +1,3 @@
-use futures01::future;
 use graphql_parser::query as q;
 use std::collections::BTreeMap;
 use std::env;
@@ -15,7 +14,7 @@ use graph::data::graphql::effort::LoadManager;
 use graph::prelude::{
     async_trait, o, EthereumBlockPointer, GraphQlRunner as GraphQlRunnerTrait, Logger, Query,
     QueryExecutionError, QueryResult, Store, StoreError, SubgraphDeploymentId,
-    SubgraphDeploymentStore, Subscription, SubscriptionError, SubscriptionResultFuture,
+    SubgraphDeploymentStore, Subscription, SubscriptionError, SubscriptionResult,
 };
 
 use lazy_static::lazy_static;
@@ -192,25 +191,26 @@ where
             .unwrap_or_else(|e| Arc::new(e))
     }
 
-    fn run_subscription(&self, subscription: Subscription) -> SubscriptionResultFuture {
-        let query = match crate::execution::Query::new(
+    async fn run_subscription(
+        self: Arc<Self>,
+        subscription: Subscription,
+    ) -> Result<SubscriptionResult, SubscriptionError> {
+        let query = crate::execution::Query::new(
             subscription.query,
             *GRAPHQL_MAX_COMPLEXITY,
             *GRAPHQL_MAX_DEPTH,
-        ) {
-            Ok(query) => query,
-            Err(e) => return Box::new(future::err(e.into())),
-        };
+        )?;
 
         if self
             .load_manager
             .decline(query.shape_hash, query.query_text.as_ref())
         {
-            let err = SubscriptionError::GraphQLError(vec![QueryExecutionError::TooExpensive]);
-            return Box::new(future::result(Err(err)));
+            return Err(SubscriptionError::GraphQLError(vec![
+                QueryExecutionError::TooExpensive,
+            ]));
         }
 
-        let result = execute_prepared_subscription(
+        execute_prepared_subscription(
             query,
             SubscriptionExecutionOptions {
                 logger: self.logger.clone(),
@@ -220,9 +220,7 @@ where
                 max_depth: *GRAPHQL_MAX_DEPTH,
                 max_first: *GRAPHQL_MAX_FIRST,
             },
-        );
-
-        Box::new(future::result(result))
+        )
     }
 
     fn load_manager(&self) -> Arc<LoadManager> {
